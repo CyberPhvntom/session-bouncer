@@ -1,0 +1,80 @@
+#!/bin/bash
+
+# Auto-Kick Unauthorized Users Script
+# Automatically terminates any user not on the authorized list
+# USE WITH CAUTION - No prompts, immediate termination!
+
+# Authorized users list - CUSTOMIZE THIS!
+AUTHORIZED_USERS=(
+    "root"
+    "score1"
+    "score2"
+    "Angel"
+    "Affan"
+    "Syed"
+    "Deep"
+    "Theodore"
+    "William"
+    "angel"
+)
+
+LOG_FILE="/var/log/auto_kick.log"
+
+# Check if user is authorized
+is_authorized() {
+    local user=$1
+    for auth in "${AUTHORIZED_USERS[@]}"; do
+        [[ "$user" == "$auth" ]] && return 0
+    done
+    return 1
+}
+
+# Log function
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+# Check for root
+if [[ $EUID -ne 0 ]]; then
+    echo "Error: Must run as root (sudo)"
+    exit 1
+fi
+
+log_msg "Auto-kick monitoring started"
+echo "Auto-kick enabled for unauthorized users"
+echo "Authorized: ${AUTHORIZED_USERS[*]}"
+echo "Monitoring... Press Ctrl+C to stop"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+while true; do
+    # Get currently logged-in users
+    current_users=$(who | awk '{print $1"|"$2}' | sort -u)
+    
+    while IFS='|' read -r username tty; do
+        [[ -z "$username" ]] && continue
+        
+        if ! is_authorized "$username"; then
+            echo "[!] UNAUTHORIZED USER DETECTED: $username on $tty"
+            log_msg "ALERT: Unauthorized user '$username' on TTY '$tty'"
+            
+            # Terminate immediately
+            echo "    → Terminating session..."
+            pkill -KILL -t "$tty" 2>/dev/null
+            pkill -KILL -u "$username" 2>/dev/null
+            
+            # Also use loginctl if available
+            if command -v loginctl &> /dev/null; then
+                sessions=$(loginctl list-sessions --no-legend | grep "$username" | awk '{print $1}')
+                for session in $sessions; do
+                    loginctl terminate-session "$session" 2>/dev/null
+                done
+            fi
+            
+            log_msg "TERMINATED: User '$username' kicked out from TTY '$tty'"
+            echo "    ✓ User $username has been kicked out!"
+            echo -ne '\007'  # Beep
+        fi
+    done <<< "$current_users"
+    
+    sleep 2  # Check every 2 seconds
+done
