@@ -1,0 +1,45 @@
+#!/bin/bash
+
+# Simple User Monitor - Lightweight version
+# Shows live updates of logged-in users with color coding
+
+# Authorized users list - CUSTOMIZE THIS
+AUTHORIZED="root score1 score2 Angel Affan Deep Theodore William Syed angel"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+# Function to check if user is authorized
+is_auth() {
+    echo "$AUTHORIZED" | grep -qw "$1"
+}
+
+echo "Monitoring users... Press Ctrl+C to stop"
+echo "Authorized: $AUTHORIZED"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+while true; do
+    clear
+    echo "[$(date '+%H:%M:%S')] Active Sessions:"
+    echo ""
+    
+    # Get unique logged-in users
+    who | awk '{print $1"|"$2"|"$5}' | sort -u | while IFS='|' read -r user tty ip; do
+        if is_auth "$user"; then
+            echo -e "${GREEN}✓ AUTHORIZED${NC}  $user\t$tty\t$ip"
+        else
+            echo -e "${RED}✗ UNAUTHORIZED${NC} $user\t$tty\t$ip ${RED}<-- INTRUDER!${NC}"
+            echo -ne '\007'  # Beep
+            
+            # Auto-kick option (uncomment to enable)
+            # sudo pkill -KILL -u "$user"
+            # echo "  → Kicked out $user"
+        fi
+    done
+    
+    echo ""
+    echo "Press Ctrl+C to stop | Checking every 2 seconds..."
+    sleep 2
+done
