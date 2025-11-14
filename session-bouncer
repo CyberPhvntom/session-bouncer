@@ -1,0 +1,200 @@
+#!/bin/bash
+
+# User Monitoring Script for Blue Team
+# Monitors for unauthorized user logins and prompts to terminate them
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Whitelist of authorized users (modify this list)
+AUTHORIZED_USERS=(
+    "root"
+    "score1"
+    "score2"
+    "Angel"
+    "Affan"
+    "William"
+    "Theodore"
+    "Deep"
+    "Syed"
+    "angel"
+)
+
+# Log file for tracking kicked users
+LOG_FILE="/var/log/user_monitor.log"
+ALERT_SOUND=true  # Set to false to disable beep
+
+# Function to check if user is authorized
+is_authorized() {
+    local username=$1
+    for authorized in "${AUTHORIZED_USERS[@]}"; do
+        if [[ "$username" == "$authorized" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Function to log events
+log_event() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | sudo tee -a "$LOG_FILE" > /dev/null
+}
+
+# Function to get logged in users with details
+get_logged_users() {
+    # Use 'who' for simple parsing
+    who | awk '{print $1"|"$2"|"$5}' | sort -u
+}
+
+# Function to terminate user session
+terminate_user() {
+    local username=$1
+    local tty=$2
+    
+    echo -e "${RED}[!] Terminating session for: $username on $tty${NC}"
+    
+    # Method 1: Kill by TTY
+    sudo pkill -KILL -t "$tty" 2>/dev/null
+    
+    # Method 2: Kill all processes for user (backup)
+    sudo pkill -KILL -u "$username" 2>/dev/null
+    
+    # Method 3: Terminate systemd session if available
+    if command -v loginctl &> /dev/null; then
+        local sessions=$(loginctl list-sessions --no-legend | grep "$username" | awk '{print $1}')
+        for session in $sessions; do
+            sudo loginctl terminate-session "$session" 2>/dev/null
+        done
+    fi
+    
+    log_event "TERMINATED: User '$username' on TTY '$tty'"
+    echo -e "${GREEN}[✓] User $username has been kicked out!${NC}"
+}
+
+# Function to display banner
+show_banner() {
+    clear
+    echo -e "${BLUE}"
+    echo "╔════════════════════════════════════════════════════╗"
+    echo "║       BLUE TEAM - USER MONITORING SYSTEM           ║"
+    echo "║            Unauthorized Access Detection           ║"
+    echo "╚════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo -e "${GREEN}Authorized Users:${NC}"
+    printf '%s\n' "${AUTHORIZED_USERS[@]}" | column
+    echo ""
+    echo -e "${YELLOW}Monitoring started at: $(date)${NC}"
+    echo "Press Ctrl+C to stop monitoring"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+}
+
+# Function to check and alert on unauthorized users
+check_users() {
+    local found_unauthorized=false
+    
+    while IFS='|' read -r username tty ip; do
+        # Skip empty lines
+        [[ -z "$username" ]] && continue
+        
+        # Check if user is authorized
+        if ! is_authorized "$username"; then
+            found_unauthorized=true
+            
+            # Alert sound (beep)
+            if $ALERT_SOUND; then
+                echo -ne '\007' 2>/dev/null
+            fi
+            
+            echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo -e "${RED}[!] ALERT: UNAUTHORIZED USER DETECTED!${NC}"
+            echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo -e "Username: ${RED}$username${NC}"
+            echo -e "TTY:      $tty"
+            echo -e "From:     $ip"
+            echo -e "Time:     $(date '+%H:%M:%S')"
+            echo ""
+            
+            log_event "ALERT: Unauthorized user '$username' detected on TTY '$tty' from '$ip'"
+            
+            # Prompt for action
+            echo -n "Kick this user out? [Y/n/i(gnore)]: "
+            read -t 10 -n 1 response
+            echo ""
+            
+            case "$response" in
+                [Yy]|"")
+                    terminate_user "$username" "$tty"
+                    ;;
+                [Ii])
+                    echo -e "${YELLOW}[~] Ignoring user $username (this session only)${NC}"
+                    log_event "IGNORED: User '$username' on TTY '$tty'"
+                    ;;
+                *)
+                    echo -e "${YELLOW}[~] Skipped termination for $username${NC}"
+                    log_event "SKIPPED: User '$username' on TTY '$tty'"
+                    ;;
+            esac
+            echo ""
+        fi
+    done < <(get_logged_users)
+    
+    # If no unauthorized users found, show status
+    if ! $found_unauthorized; then
+        echo -ne "\r${GREEN}[$(date '+%H:%M:%S')] Monitoring... All users authorized.${NC}          "
+    fi
+}
+
+# Function to show current sessions
+show_sessions() {
+    echo -e "\n${BLUE}Current Active Sessions:${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    while IFS='|' read -r username tty ip; do
+        [[ -z "$username" ]] && continue
+        
+        if is_authorized "$username"; then
+            echo -e "${GREEN}✓${NC} $username\t$tty\t$ip"
+        else
+            echo -e "${RED}✗${NC} $username\t$tty\t$ip ${RED}[UNAUTHORIZED]${NC}"
+        fi
+    done < <(get_logged_users)
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# Main monitoring loop
+main() {
+    # Check if running with sudo
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${RED}Error: This script must be run with sudo privileges${NC}"
+        echo "Usage: sudo bash $0"
+        exit 1
+    fi
+    
+    # Create log file if doesn't exist
+    touch "$LOG_FILE" 2>/dev/null
+    
+    show_banner
+    log_event "Monitoring started"
+    
+    # Main loop
+    while true; do
+        check_users
+        show_sessions
+        sleep 3  # Check every 3 seconds (adjust as needed)
+        
+        # Move cursor up to overwrite status line
+        echo -ne "\033[2K"  # Clear line
+    done
+}
+
+# Trap Ctrl+C
+trap 'echo -e "\n${YELLOW}Monitoring stopped.${NC}"; log_event "Monitoring stopped"; exit 0' INT
+
+# Run main function
+main
