@@ -1,0 +1,42 @@
+#!/bin/bash
+
+# CLUB-MANAGR Script - Monitors SESSION-BOUNCR and restarts if killed
+# This is the "monitor the monitor" script
+
+SCRIPT_TO_MONITOR="/usr/local/bin/session-bouncrv2.sh"
+SCRIPT_NAME="session-bouncrv2.sh"
+LOG_FILE="/var/log/session-bouncr-watchr.log"
+CHECK_INTERVAL=15  # Check every 15 seconds
+
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+    echo "Error: Watchdog must run as root"
+    exit 1
+fi
+
+log_msg "Watchdog started (PID: $$)"
+
+while true; do
+    # Check if SESSION-BOUNCR is running
+    if ! pgrep -f "$SCRIPT_NAME" > /dev/null; then
+        log_msg "WARNING: SESSION-BOUNCR not running! Restarting..."
+        
+        # Start the script in the background
+        nohup "$SCRIPT_TO_MONITOR" >> /var/log/session-bouncr-output.log 2>&1 &
+        
+        sleep 2
+        
+        # Verify it started
+        if pgrep -f "$SCRIPT_NAME" > /dev/null; then
+            log_msg "SUCCESS: SESSION-BOUNCR restarted (PID: $(pgrep -f "$SCRIPT_NAME"))"
+        else
+            log_msg "ERROR: Failed to restart SESSION-BOUNCR!"
+        fi
+    fi
+    
+    sleep "$CHECK_INTERVAL"
+done
